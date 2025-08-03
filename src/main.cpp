@@ -1,56 +1,32 @@
-#include <Arduino.h>
-#include <AsyncJson.h>
-#include <ArduinoJson.h>
 #include <FastLED.h>
+#include <HomeSpan.h>  // Inclure la bibliothèque HomeSpan pour HomeKit
 
+// ---- Configuration des LEDs ----
 #define LED_PIN     4
-#define NUM_LEDS    186
+#define NUM_LEDS    7
 #define BRIGHTNESS  255
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
 
+//----Class
 
-// #define ComLEDS 4
-// #define RXD2 16
-// #define TXD2 17
+
+
 
 
 //-----Constantes liées à ce programme
 
 
-unsigned long lastShowTime = 0;   // Temps du dernier appel de FastLED.show()
-const unsigned long showDelay = 0 ;  // Délai minimum entre deux appels (en millisecondes) - correspond à environ 30 fps
-
 const int nbPointMax = 16;
-const int nbParamametre = 4;
-const int limiteParametre[nbParamametre][2]={{0,190},{0,255},{0,255},{0,NUM_LEDS}};
+const int nbParametre = 4;
+const int nbPreset = 2;
+const int limiteParametre[nbParametre][2]={{0,190},{0,255},{0,255},{0,NUM_LEDS}};
 
-const String nomParametre[nbParamametre]={"hue","saturation","luminosite","position"};
-const size_t CAPACITY = JSON_ARRAY_SIZE(nbPointMax*nbParamametre*2);
-
-
-bool ap = false;
-String header;
-
-String output26State = "off";
-String output27State = "off";
-
-
-//-----Variable communication serie 
-
-String mesToESP;
-bool emission=false;
-int etatEmission=0;
-int etatReception=0;
-int preEtatEmission=0;
-int preEtatReception=0;
-int essai =0;
+const String nomParametre[nbParametre]={"hue","saturation","luminosite","position"};
 
 
 
-unsigned long long debAttente=0;
-unsigned long long actAttente=0;
 
 //-----Variables de parametrage
 
@@ -60,19 +36,106 @@ String nomEffet = "défaut";
 
 bool changementParams = true;
 bool changementEffets = true;
-bool connexion = false;
 bool allumee = false;
+bool compower_flag = false;
+bool preset_flag = false;
 bool comPower = false;
 int nbPoint=2;
-int nbEffet=2;
+int nbEffet=1;
 String etatAct="allumage";
 String etatPre="eteint";
 
-int listeActPara[nbParamametre][nbPointMax];
-int listeNewPara[nbParamametre][nbPointMax]={{5,5},{255,255},{255,255},{0,77}};
-int listeEffect[nbParamametre][nbPointMax];
-int listeNewEffect[nbParamametre][nbPointMax]={{1,2},{3,4},{6,7},{144,144,}};
+int listeActPara[nbParametre][nbPointMax];
+int listeNewPara[nbParametre][nbPointMax]={{1,100},{255,210},{200,255},{1,3}};
+int listeEffect[nbParametre][nbPointMax];
+int listeNewEffect[nbParametre][nbPointMax]={{0},{0},{0},{250}};
 String NomEffet[8]={"Aucun","Rot Trigo","Rot Horaire","Respiration","Scintillement","Crepitement","Extinction ETB","Extinction BTE"};
+
+
+
+class Preset {
+public:
+  int nbPoint;
+  int nbEffet;
+
+  int listeNewPara[nbParametre][nbPointMax];
+  int listeNewEffect[nbParametre][nbPointMax];
+
+  Preset() {
+  nbPoint = 0;
+  nbEffet = 0;
+  memset(listeNewPara, 0, sizeof(listeNewPara));
+  memset(listeNewEffect, 0, sizeof(listeNewEffect));
+}
+
+
+  Preset(int _nbPoint, int _nbEffet,
+        int _listeNewPara[nbParametre][nbPointMax],
+        int _listeNewEffect[nbParametre][nbPointMax])
+      : nbPoint(_nbPoint), nbEffet(_nbEffet) {
+
+    for (int i = 0; i < nbParametre; i++) {
+      for (int j = 0; j < nbPointMax; j++) {
+        listeNewPara[i][j] = _listeNewPara[i][j];
+        listeNewEffect[i][j] = _listeNewEffect[i][j];
+      }
+    }
+  }
+};
+
+Preset clonePreset(Preset src) {
+  Preset clone;
+  clone.nbPoint = src.nbPoint;
+  clone.nbEffet = src.nbEffet;
+
+  for (int i = 0; i < nbParametre; i++) {
+    for (int j = 0; j < nbPointMax; j++) {
+      clone.listeNewPara[i][j] = src.listeNewPara[i][j];
+      clone.listeNewEffect[i][j] = src.listeNewEffect[i][j];
+    }
+  }
+
+  return clone;
+}
+
+
+int datalisteNewPara_1[nbParametre][nbPointMax] = {{100, 120},{255, 210},{200, 255},{1, 3}};
+int dataListeNewEffect_1[nbParametre][nbPointMax] = {{1},{2},{3},{250}};
+Preset preset_1(2, 1, datalisteNewPara_1, dataListeNewEffect_1);
+
+int datalisteNewPara_2[nbParametre][nbPointMax] = {{1, 20},{200, 255},{100, 100},{1, 3}};
+int dataListeNewEffect_2[nbParametre][nbPointMax] = {{0},{0},{0},{250}};
+Preset preset_2(2, 1, datalisteNewPara_2, dataListeNewEffect_2);
+
+Preset presets[nbPreset]={preset_1, preset_2};
+Preset preset_act = presets[0];
+Preset preset_pre = presets[0];
+
+void printLine(const char* name, int lineIndex, int tableau[nbParametre][nbPointMax], int nbPoints) {
+  Serial.printf("%s: [", name);
+  for (int j = 0; j < nbPoints; j++) {
+    Serial.printf("%d", tableau[lineIndex][j]);
+    if (j < nbPoints - 1) Serial.print(", ");
+  }
+  Serial.println("]");
+}
+
+void applyPreset(Preset monPreset) {
+  preset_flag = false;
+
+  nbPoint=monPreset.nbPoint;
+  nbEffet=monPreset.nbEffet;
+
+  for (int i = 0; i < nbParametre; i++) {
+    for (int j = 0; j < nbPoint; j++) {
+      listeNewPara[i][j] = monPreset.listeNewPara[i][j];
+      listeNewEffect[i][j] = monPreset.listeNewEffect[i][j];
+    }
+  }
+  changementParams = true;
+  changementEffets = true;
+}
+
 
 
 //-----Variables de calcul
@@ -94,37 +157,14 @@ int posLumPersonalie[nbPointMax];
 //float listeScinti[NUM_LEDS];
 int choixPre=0;
 int choixPrePre=0;
-
 int resolution=200;
 int mode=0;
-
 int longueurRampe=15;
-
-
-
-
 int choixPointPre=0;
-
 bool debug=false;
 
-//-----Gestion du temps
 
-unsigned long long superMillis() 
-{
-  static unsigned long nbRollover = 0;
-  static unsigned long previousMillis = 0;
-  unsigned long currentMillis = millis();
-  
-  if (currentMillis < previousMillis) {
-     nbRollover++;
-  }
-  previousMillis = currentMillis;
 
-  unsigned long long finalMillis = nbRollover;
-  finalMillis <<= 32;
-  finalMillis +=  currentMillis;
-  return finalMillis;
-}
 
 void A();
 void B();
@@ -133,238 +173,48 @@ void D();
 
 void show()
 {
-  unsigned long currentTime = millis();  // Obtenir le temps actuel en millisecondes
-  
-  // Calculer le temps écoulé depuis le dernier appel
-  unsigned long elapsedTime = currentTime - lastShowTime; 
-  
-  // Vérifier si suffisamment de temps s'est écoulé depuis le dernier appel
-  if (elapsedTime >= showDelay)
-  {
-    // // Serial.println("FastLED.show() called");
+
     FastLED.delay(1/60); 
     FastLED.show();        // Mettre à jour les LEDs
-    lastShowTime = currentTime;  // Mettre à jour le temps de l'appel
-    // // Serial.print("Time since last show: ");
-    // // Serial.print(elapsedTime);  // Afficher le temps écoulé
-    // // Serial.println(" ms");
-  }
-  // else
-  // {
-  //   // Serial.print("FastLED.show() skipped (too soon), elapsed time: ");
-  //   // Serial.print(elapsedTime);  // Afficher le temps écoulé
-  //   // Serial.println(" ms");
-  // }
+
 }
 
 
 void ChangementParrametres()//sert uniquement a la comunication
 {
-  for(int i=0; i<nbParamametre;i++)
+  for(int i=0; i<nbParametre;i++)
   {
-    // Serial.println("Changement parametre");
     for(int o=0; o<nbPoint; o++)
     {
       listeActPara[i][o]=listeNewPara[i][o];
     }
   }
-  //// Serial.println("changement Couleur termine");
 }
 
 void ChangementEffet()//sert uniquement a la comunication
 {
-  for(int i=0; i<nbParamametre;i++)
+  for(int i=0; i<nbParametre;i++)
   {
     for(int o=0; o<nbEffet; o++)
     {
       listeEffect[i][o]=listeNewEffect[i][o];      
     }
   }
-  //// Serial.println("changement Effet termine");
 }
 
-
-
-bool ReceptionJSON()
-{
-    bool jsonOk = false;
-    String messageRecu = "";
-    bool inMessage = false;
-    int openBracesCount = 0;
-    unsigned long lastReadTime = millis();  // Gérer les délais
-
-    // Serial.println("Début lecture");
-
-    // Tant que des données sont disponibles et que le délai n'est pas dépassé
-    if (Serial)
-    {
-      while ((millis() - lastReadTime < 200) || Serial.available() > 0)  // Timeout après 1 seconde
-      {
-          // S'il y a des données disponibles sur la liaison série
-          if (Serial.available() > 0)
-          {
-              char carLu = Serial.read();
-              lastReadTime = millis();  // Réinitialiser le délai
-
-              // Gestion des accolades ouvrantes et fermantes
-              if (carLu == '{') 
-              {
-                  inMessage = true;
-                  openBracesCount++;
-                  messageRecu += carLu;
-              } 
-              else if (carLu == '}' && inMessage) 
-              {
-                  openBracesCount--;
-                  messageRecu += carLu;
-
-                  if (openBracesCount == 0) 
-                  {
-                      jsonOk = true;
-                      break;
-                  }
-              } 
-              else if (inMessage) 
-              {
-                  messageRecu += carLu;
-              }
-          }
-      }
-    }else{
-      Serial.begin(115200);
-    }
-    // Serial.println("Fin de lecture");
-
-  if (jsonOk) 
-  {
-    // Serial.println("\nMessage JSON reçu :");
-    // Serial.println(messageRecu);
-
-    DynamicJsonDocument docRecupration(4096);
-    DeserializationError error = deserializeJson(docRecupration, messageRecu);
-    
-    if (error) 
-    {
-      // Serial.print("Erreur de désérialisation : ");
-      // Serial.println(error.c_str());
-      return false;
-    }
-
-    // ----- Commande allumage -----
-    comPower = docRecupration["Para"]["comPower"].as<bool>();
-    // Serial.print("ComPower = ");
-    // Serial.println(comPower);
-
-    // ----- nomLumière -----
-    nomLumiere = docRecupration["Para"]["nomLumiere"].as<String>();
-    // Serial.print("nomLumiere = ");
-    // Serial.println(nomLumiere);
-
-    // ----- nomEffet -----
-    nomEffet = docRecupration["Para"]["nomEffet"].as<String>();
-    // Serial.print("nomEffet = ");
-    // Serial.println(nomEffet);
-
-    // ----- NbPoint -----
-    nbPoint = docRecupration["Para"]["nbPoint"].as<int>();
-    // Serial.print("NbPoint = ");
-    // Serial.println(nbPoint);
-
-    // ----- NbEffet -----
-    nbEffet = docRecupration["Para"]["nbEffet"].as<int>();
-    // Serial.print("NbEffet = ");
-    // Serial.println(nbEffet);
-
-    // ----- ListePoint -----
-    JsonArray listeNewParaArray = docRecupration["Para"]["listeNewPara"].as<JsonArray>();
-    int i = 0;
-    for (JsonVariant v : listeNewParaArray) 
-    {
-      int o = 0;
-      JsonArray innerArray = v.as<JsonArray>();
-      for (JsonVariant w : innerArray) 
-      {
-        if (i < 3)
-        {
-          listeNewPara[i][o] = w.as<int>();
-        } 
-        else 
-        {
-          listeNewPara[i][o] = w.as<int>() * NUM_LEDS / 200;
-        }
-        // Serial.print(listeNewPara[i][o]);
-        // Serial.print(" ");
-        o++;
-      }
-      i++;
-    }
-
-    // ----- ListeEffet -----
-    JsonArray listeNewEffectArray = docRecupration["Para"]["listeNewEffect"].as<JsonArray>();
-    i = 0;
-    for (JsonVariant v : listeNewEffectArray) 
-    {
-      int o = 0;
-      JsonArray innerArray = v.as<JsonArray>();
-      for (JsonVariant w : innerArray) 
-      {
-        listeNewEffect[i][o] = w.as<int>();
-        // Serial.print(listeNewEffect[i][o]);
-        // Serial.print(" ");
-        o++;
-      }
-      i++;
-    }
-  }else{
-    // Serial.println("json invalide ISSOU");
-  }
-
-  return jsonOk;
-}
-
-void receptionSerie()
-{
-  if(Serial.available() > 0)
-    {
-      bool b = ReceptionJSON();
-      // Serial.print(b);
-      if(b)
-      {
-        changementParams =true;
-        changementEffets =true;
-
-        if(comPower != allumee)
-        {
-          if(comPower == false && allumee == true)
-          {
-            C();
-          }
-          if(comPower == true && allumee == false)
-          {
-            D();
-          }
-        }else if(allumee == true)
-        {
-          A();
-        }
-
-      }
-    }else{
-      B();
-    }
-}
 
 void CommunicationLEDS()
 {
   for(int i=0 ; i<NUM_LEDS ; i++)
   {
-    if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
+    if(compower_flag){break;}
     
 
     CHSV spectrumcolor;
     spectrumcolor.hue = ledActHue[i];//couleur
     spectrumcolor.saturation =ledActSat[i];//0 blanc
     spectrumcolor.value =  ledActLum[i];//0noir
+
     hsv2rgb_rainbow( spectrumcolor, leds[i] ); 
   }
   if(comPower == true || allumee == true)
@@ -902,8 +752,7 @@ void gestionEffets(int mode, int i)
   switch (mode)
   {
   case 0:// Initialisation des effets
-  // Serial.println("Case N°0 - Initialisation des effets");
-    if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
+    if(compower_flag){break;}
     
 
 
@@ -922,10 +771,9 @@ void gestionEffets(int mode, int i)
     break;
 
   case 1:// Aller des effets
-    // Serial.println("Case N°1 - Aller des effets");
     for(int o = 0; o<resolution;o++)
     {
-      if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
+      if(compower_flag){break;}
       
 
 
@@ -968,8 +816,7 @@ void gestionEffets(int mode, int i)
     break;
 
   case 2:// dé-initialisation des effets
-    // Serial.println("Case N°2 - dé-initialisation des effets");
-    if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
+    if(compower_flag){break;}
     
 
     if(listeEffect[0][i]==3 && nbPoint > 1){respiration(mode,true,false,false,resolution);}
@@ -995,11 +842,10 @@ void gestionEffets(int mode, int i)
     break;
 
       case 3:// retour des effets
-    // Serial.println("Case N°3 - retour des effets");
     for(int o = 0; o<resolution;o++)
     {
       
-      if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
+      if(compower_flag){break;}
       
 
       if(listeEffect[0][i]==1 && nbPoint > 1){RotationHoraire(ledActHue);}
@@ -1041,7 +887,6 @@ void gestionEffets(int mode, int i)
 
 void A()
 {
-  Serial.println("Fonction A");
   etatPre=etatAct;
   etatAct="Parametres";
   ChangementParrametres();
@@ -1060,142 +905,213 @@ void A()
   {
     ChangementParPoint(true, true, true);
     CommunicationLEDS();
-    if(Serial){if(Serial.available()>0 ){receptionSerie(); break;}}
   }
-  // Serial.println("Modifications terminées !");
 
   changementParams =false;
 }
 
 void B()
 {
-  Serial.println("Fonction B");
   etatPre=etatAct;
   etatAct="Effet";
   ChangementEffet();
   changementEffets = false;
-  //// Serial.println("Modifications terminées !");
 }
 
-void C()
-{
-  Serial.println("Fonction C");
-  etatPre=etatAct;
-  etatAct="Off";
-  // Serial.println(etatAct);
-  for(int i=0;i<nbPoint;i++)
-  {
-    listeNewPara[2][i]=0;
-  }
-  paraToTab(ledNewLum, listeActPara[3], listeNewPara[2]);
-  resolution=30;
-  CalculDegradeParPoint(ledActLum,ledNewLum,vectLum,resolution);
+void C() {
+  etatPre = etatAct;
+  etatAct = "Off";
 
-  for(int i = 0; i< resolution; i++)
-  {
-    ChangementParPoint(false, false, true);
-    CommunicationLEDS();
+  Preset preset_extinct = clonePreset(preset_act);
+
+  for (int i = 0; i < nbPoint; i++) {
+    preset_extinct.listeNewPara[2][i] = 0;
   }
-  allumee =false;
+  applyPreset(preset_extinct); 
+  A();
+  B();
+  allumee = false;
 }
 
 void D()
 {
-  Serial.println("Fonction D");
   etatPre=etatAct;
   etatAct="On";
-  // Serial.println(etatAct);
-  paraToTab(ledNewLum, listeActPara[3], listeActPara[2]);
-  resolution=30;
-  CalculDegradeParPoint(ledActLum,ledNewLum,vectLum,resolution);
-  for(int i = 0; i< resolution; i++)
-  {
-    ChangementParPoint(false, false, true);
-    CommunicationLEDS();
-  }
+  applyPreset(preset_act);
+  A();
+  B();
   allumee =true;
 }
 
-void setup()
-{
-  //----------------------------------------------------Serial
-  // Serial.begin(115200);
-  // Serial.println("\n");
-  // Serial.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
 
-  // pinMode(ComLEDS, OUTPUT);
-  // FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
-  // FastLED.setBrightness(  BRIGHTNESS );
-  Serial.begin(115200);
-  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-  FastLED.setBrightness(BRIGHTNESS);
-  FastLED.delay(1/60); 
-  
+// ---- Tâche dédiée aux LEDs ----
+void ledTask(void *parameter) {
+    // Initialiser les LEDs
+    FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+    FastLED.setBrightness(BRIGHTNESS);
+    FastLED.delay(1/60); 
+    FastLED.clear();
+    FastLED.show();
 
 
+    while (true) {
+
+        if(etatAct!=etatPre)
+        {
+            etatPre=etatAct;
+        }
+
+        if(allumee == true && comPower == true)
+        {
+            if(changementParams == true )
+            {
+            A();
+            }
+            if(changementEffets == true)
+            {
+            B();
+            }
+            if(changementParams == false && changementEffets == false)//Resipration pour HUE
+            {
+            etatPre=etatAct;
+            etatAct="Boucle d'éffets";
+            for(int i= 0; i<nbEffet;i++)
+            {
+              resolution=listeEffect[3][i];
+              gestionEffets(0, i);
+              gestionEffets(1, i);
+              gestionEffets(2, i);
+              gestionEffets(3, i);
+              if(changementParams==true || changementEffets == true ||  comPower!=allumee || compower_flag==true || preset_flag==true){break;}
+            }
+            }
+        }else{
+            if(compower_flag == true){
+              compower_flag = false;
+            }
+            if(comPower == false && allumee == true)
+            {
+            C();
+            }
+            if(comPower == true && allumee == false)
+            {
+            D();
+            }
+        }
+        vTaskDelay(10 / portTICK_PERIOD_MS);  // Pause minimale pour d'autres tâches
+    }
+}
+
+
+
+struct LEDService : Service::LightBulb {
+    Characteristic::On *power;  // Caractéristique pour contrôler l'état de la lumière (on/off)
+
+    LEDService() : Service::LightBulb() {
+        power = new Characteristic::On(false);  // Initialisation à éteint
+    }
+
+    boolean update() override {
+        compower_flag = true;
+        if (power->getNewVal()) {
+            comPower = true;
+        } else {
+            comPower = false;
+        }
+        return true;
+    }
+};
+
+
+struct PresetSelectorService : Service::Fan {
+  Characteristic::RotationSpeed *presetSlider;
+  int lastSelectedPreset = -1;  // Mémorise le dernier preset appliqué
+
+  PresetSelectorService() : Service::Fan() {
+    presetSlider = new Characteristic::RotationSpeed(0);  // Valeur initiale : preset[0]
+    presetSlider->setRange(0, nbPreset - 1, 1);            // Min = 0, Max = nbPreset-1, step = 1
+  }
+
+  boolean update() override {
+    preset_flag = true;
+    int selectedPreset = (int)presetSlider->getVal();
+
+    if (selectedPreset != lastSelectedPreset) {
+      lastSelectedPreset = selectedPreset;
+      preset_act = presets[selectedPreset];
+      applyPreset(preset_act);
+    }
+
+    
+
+    return true;
+  }
+};
+
+
+// ---- Tâche dédiée à HomeKit et au serveur ----
+void homeKitTask(void *parameter) {
+    Serial.println("HomeKit Task démarré");
+    // Configuration HomeKit
+    homeSpan.setPairingCode("11122333");  // Définir le code d'appairage
+    homeSpan.setQRID("111-22-333");      // QR ID pour HomeKit
+
+    // Gestion des paramètres Wi-Fi
+    homeSpan.setWifiCredentials("Livebox-72CA_EXT_24", "NCqLSErkrjCKFuow5t");
+    homeSpan.begin(Category::Lighting, "test_esp32");  // Initialiser HomeKit
+
+    // ---- Configuration de l'accessoire principal ----
+    new SpanAccessory();
+      new Service::AccessoryInformation();
+        new Characteristic::Identify();
+        new Characteristic::Name("LED Lights");
+      new LEDService();
+      new PresetSelectorService();
+
+
+    Serial.println("Accessoire configuré, boucle HomeKit démarrée...");
+
+    // Démarrer la boucle principale HomeKit
+    while (true) {
+        homeSpan.poll();  // Gérer les requêtes HomeKit
+        vTaskDelay(10 / portTICK_PERIOD_MS);  // Laisser du temps pour éviter une surcharge
+
+
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    Serial.println("Initialisation du système...");
+
+
+    // Démarrer la tâche LED
+    xTaskCreatePinnedToCore(
+        ledTask,          // Fonction de la tâche
+        "LED Task",       // Nom de la tâche
+        4096,             // Taille de la pile
+        NULL,             // Paramètre (non utilisé)
+        3,                // Priorité élevée
+        NULL,             // Handle de tâche
+        1                 // Exécuter sur le second core
+    );
+
+    // Démarrer la tâche HomeKit
+    xTaskCreatePinnedToCore(
+        homeKitTask,      // Fonction de la tâche
+        "HomeKit Task",   // Nom de la tâche
+        8192,             // Taille de la pile (plus grand pour HomeKit)
+        NULL,             // Paramètre (non utilisé)
+        2,                // Priorité moyenne
+        NULL,             // Handle de tâche
+        1                 // Exécuter sur le second core
+    );
 }
 
 void loop() {
-
-  Serial.print("Loop !");
-  if(emission==true)
-  {
-
-  }else
-  {
-    if(Serial){receptionSerie();}
-  }
-  
-  if(etatAct!=etatPre)
-  {
-    etatPre=etatAct;
-  }
-
-  if(comPower == allumee)
-  {
-    if(changementParams == true && connexion == false && allumee == true)
-    {
-      A();
-    }
-    if(changementParams == false && changementEffets == true && connexion == false && allumee == true)
-    {
-      B();
-    }
-    if(changementParams == false && changementEffets== false && connexion == false && allumee == true)//Resipration pour HUE
-    {
-      etatPre=etatAct;
-      etatAct="Boucle d'éffets";
-      for(int i= 0; i<nbEffet;i++)
-      {
-        resolution=listeEffect[3][i];
-        gestionEffets(0, i);
-        gestionEffets(1, i);
-        gestionEffets(2, i);
-        gestionEffets(3, i);
-        if(changementParams==true || changementEffets == true ||  comPower!=allumee || Serial.available()>0 || etatReception>0){break;}
-
-      }
-    }
-  }else{
-    if(comPower == false && allumee == true)
-    {
-      C();
-    }
-    if(comPower == true && allumee == false)
-    {
-      D();
-    }
-  }
-  if(!Serial1)
-  {
-    Serial1.begin(115200);
-    if(!Serial1)
-    {
-      B();
-    }
-
-  }
+    // Laisser le système en mode multitâche ; ne rien bloquer ici
+    delay(1000);
 }
 
 
