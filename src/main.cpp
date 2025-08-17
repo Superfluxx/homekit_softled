@@ -1,31 +1,29 @@
 #include <FastLED.h>
 #include <HomeSpan.h>  // Inclure la bibliothèque HomeSpan pour HomeKit
+#include <algorithm> // pour std::clamp
+
+
+#define NUM_LEDS      7//186
+#define HOMESPAN8NAME "test esp32"//"Bureau"
 
 // ---- Configuration des LEDs ----
 #define LED_PIN     4
-#define NUM_LEDS    7
 #define BRIGHTNESS  255
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
 
-//----Class
-
-
-
 
 
 //-----Constantes liées à ce programme
-
-
 const int nbPointMax = 16;
 const int nbParametre = 4;
-const int nbPreset = 2;
+const int nbPreset = 5;
 const int limiteParametre[nbParametre][2]={{0,190},{0,255},{0,255},{0,NUM_LEDS}};
 
 const String nomParametre[nbParametre]={"hue","saturation","luminosite","position"};
 
-
+int relative_to_real_pos(float percent);
 
 
 //-----Variables de parametrage
@@ -33,7 +31,7 @@ const String nomParametre[nbParametre]={"hue","saturation","luminosite","positio
 String nomLumiere = "défaut";
 String nomEffet = "défaut";
 
-
+bool changing = false;
 bool changementParams = true;
 bool changementEffets = true;
 bool allumee = false;
@@ -99,17 +97,13 @@ Preset clonePreset(Preset src) {
 }
 
 
-int datalisteNewPara_1[nbParametre][nbPointMax] = {{100, 120},{255, 210},{200, 255},{1, 3}};
-int dataListeNewEffect_1[nbParametre][nbPointMax] = {{1},{2},{3},{250}};
+int datalisteNewPara_1[nbParametre][nbPointMax] = {{100, 120},{255, 210},{200, 255},{1, relative_to_real_pos(0.5)}};
+int dataListeNewEffect_1[nbParametre][nbPointMax] = {{1},{2},{3},{600}};
 Preset preset_1(2, 1, datalisteNewPara_1, dataListeNewEffect_1);
 
-int datalisteNewPara_2[nbParametre][nbPointMax] = {{1, 20},{200, 255},{100, 100},{1, 3}};
-int dataListeNewEffect_2[nbParametre][nbPointMax] = {{0},{0},{0},{250}};
-Preset preset_2(2, 1, datalisteNewPara_2, dataListeNewEffect_2);
 
-Preset presets[nbPreset]={preset_1, preset_2};
-Preset preset_act = presets[0];
-Preset preset_pre = presets[0];
+Preset preset_act = preset_1;
+Preset preset_pre = preset_1;
 
 void printLine(const char* name, int lineIndex, int tableau[nbParametre][nbPointMax], int nbPoints) {
   Serial.printf("%s: [", name);
@@ -121,6 +115,8 @@ void printLine(const char* name, int lineIndex, int tableau[nbParametre][nbPoint
 }
 
 void applyPreset(Preset monPreset) {
+  preset_pre = preset_act;
+  preset_act = monPreset;
   preset_flag = false;
 
   nbPoint=monPreset.nbPoint;
@@ -136,7 +132,15 @@ void applyPreset(Preset monPreset) {
   changementEffets = true;
 }
 
+int relative_to_real_pos(float percent) {
+  // Clamp le pourcentage entre 0.0 et 1.0
+  if (percent < 0.0) percent = 0.0;
+  if (percent > 1.0) percent = 1.0;
 
+  // Calcule l'index en fonction de NUM_LEDS
+  int index = round(percent * (NUM_LEDS - 1));
+  return index;
+}
 
 //-----Variables de calcul
 float ledNewHue[NUM_LEDS];
@@ -171,13 +175,30 @@ void B();
 void C();
 void D();
 
-void show()
-{
 
-    FastLED.delay(1/60); 
+
+
+void show() {
+    static unsigned long lastFrame = 0;             // Temps de la dernière frame
+    unsigned long now = millis();                   // Temps actuel
+    unsigned long frameTime = 1000 / 60;           // Durée d'une frame à 60 FPS (≈16 ms)
+
+    // Temps écoulé depuis la dernière frame
+    unsigned long elapsed = now - lastFrame;
+
+    if (elapsed < frameTime) {
+        unsigned long waitTime = frameTime - elapsed;
+        Serial.print("delayed for ");
+        Serial.print(waitTime);
+        Serial.println(" ms");
+        FastLED.delay(waitTime);
+    }
+
+
     FastLED.show();        // Mettre à jour les LEDs
-
+    lastFrame = millis();  // On marque le temps d'affichage
 }
+
 
 
 void ChangementParrametres()//sert uniquement a la comunication
@@ -207,7 +228,7 @@ void CommunicationLEDS()
 {
   for(int i=0 ; i<NUM_LEDS ; i++)
   {
-    if(compower_flag){break;}
+    if(compower_flag || preset_flag){break;}
     
 
     CHSV spectrumcolor;
@@ -752,7 +773,7 @@ void gestionEffets(int mode, int i)
   switch (mode)
   {
   case 0:// Initialisation des effets
-    if(compower_flag){break;}
+    if(compower_flag || preset_flag){break;}
     
 
 
@@ -773,7 +794,7 @@ void gestionEffets(int mode, int i)
   case 1:// Aller des effets
     for(int o = 0; o<resolution;o++)
     {
-      if(compower_flag){break;}
+      if(compower_flag || preset_flag){break;}
       
 
 
@@ -816,7 +837,7 @@ void gestionEffets(int mode, int i)
     break;
 
   case 2:// dé-initialisation des effets
-    if(compower_flag){break;}
+    if(compower_flag || preset_flag){break;}
     
 
     if(listeEffect[0][i]==3 && nbPoint > 1){respiration(mode,true,false,false,resolution);}
@@ -845,7 +866,7 @@ void gestionEffets(int mode, int i)
     for(int o = 0; o<resolution;o++)
     {
       
-      if(compower_flag){break;}
+      if(compower_flag || preset_flag){break;}
       
 
       if(listeEffect[0][i]==1 && nbPoint > 1){RotationHoraire(ledActHue);}
@@ -887,6 +908,8 @@ void gestionEffets(int mode, int i)
 
 void A()
 {
+  Serial.println("A");
+
   etatPre=etatAct;
   etatAct="Parametres";
   ChangementParrametres();
@@ -895,7 +918,7 @@ void A()
   paraToTab(ledNewSat, listeActPara[3], listeActPara[1]);
   paraToTab(ledNewLum, listeActPara[3], listeActPara[2]);
 
-  resolution=80;
+  resolution=30;
       
   CalculDegradeParPoint(ledActHue,ledNewHue,vectHue,resolution);
   CalculDegradeParPoint(ledActSat,ledNewSat,vectSat,resolution);
@@ -903,6 +926,7 @@ void A()
 
   for(int i = 0; i< resolution; i++)
   {
+    if(preset_flag){break;}
     ChangementParPoint(true, true, true);
     CommunicationLEDS();
   }
@@ -912,6 +936,7 @@ void A()
 
 void B()
 {
+  Serial.println("B");
   etatPre=etatAct;
   etatAct="Effet";
   ChangementEffet();
@@ -919,6 +944,8 @@ void B()
 }
 
 void C() {
+  changing = true;
+  Serial.println("C");
   etatPre = etatAct;
   etatAct = "Off";
 
@@ -931,16 +958,20 @@ void C() {
   A();
   B();
   allumee = false;
+  changing = false;
 }
 
 void D()
 {
+  changing = true;
+  Serial.println("D");
   etatPre=etatAct;
   etatAct="On";
   applyPreset(preset_act);
   A();
   B();
   allumee =true;
+  changing = false;
 }
 
 
@@ -948,7 +979,8 @@ void D()
 // ---- Tâche dédiée aux LEDs ----
 void ledTask(void *parameter) {
     // Initialiser les LEDs
-    FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+    FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
+    FastLED.setTemperature(UncorrectedTemperature); // ou supprime totalement setCorrection()
     FastLED.setBrightness(BRIGHTNESS);
     FastLED.delay(1/60); 
     FastLED.clear();
@@ -962,7 +994,7 @@ void ledTask(void *parameter) {
             etatPre=etatAct;
         }
 
-        if(allumee == true && comPower == true)
+        if(allumee == true && comPower == true && preset_flag == false && compower_flag == false)
         {
             if(changementParams == true )
             {
@@ -976,8 +1008,10 @@ void ledTask(void *parameter) {
             {
             etatPre=etatAct;
             etatAct="Boucle d'éffets";
+            
             for(int i= 0; i<nbEffet;i++)
             {
+              Serial.println("Boucle effet");
               resolution=listeEffect[3][i];
               gestionEffets(0, i);
               gestionEffets(1, i);
@@ -994,7 +1028,7 @@ void ledTask(void *parameter) {
             {
             C();
             }
-            if(comPower == true && allumee == false)
+            if((comPower == true && allumee == false) || preset_flag==true)
             {
             D();
             }
@@ -1006,44 +1040,103 @@ void ledTask(void *parameter) {
 
 
 struct LEDService : Service::LightBulb {
-    Characteristic::On *power;  // Caractéristique pour contrôler l'état de la lumière (on/off)
+    Characteristic::On *power;         
+    Characteristic::Hue *hue;          
+    Characteristic::Saturation *saturation;
+    Characteristic::Brightness *brightness;   
 
     LEDService() : Service::LightBulb() {
-        power = new Characteristic::On(false);  // Initialisation à éteint
+        power = new Characteristic::On(false);   // Lumière éteinte au démarrage
+        hue = new Characteristic::Hue(0);        // 0° (rouge)
+        saturation = new Characteristic::Saturation(0);   // 0%
+        brightness = new Characteristic::Brightness(100); // 100%
+
+        // Plage personnalisée pour la luminosité : 5 à 100%, pas moins
+        brightness->setRange(5, 100, 1);
     }
+
+    static inline uint8_t hueDegTo255(float deg){
+        while (deg < 0) deg += 360.0f;
+        while (deg >= 360.0f) deg -= 360.0f;
+        return (uint8_t)roundf(deg * 255.0f / 360.0f);
+    }
+
+    static inline uint8_t pctTo255(float pct){
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        return (uint8_t)roundf(pct * 255.0f / 100.0f);
+    }
+
+    static inline int clampInt(int val, int minVal, int maxVal){
+        if (val < minVal) return minVal;
+        if (val > maxVal) return maxVal;
+        return val;
+    }
+
+    static inline uint8_t wrap255(int val) {
+        val = val % 256;       // modulo 256
+        if (val < 0) val += 256;  // assure 0..255 positif
+        return (uint8_t)val;
+    }
+
 
     boolean update() override {
-        compower_flag = true;
-        if (power->getNewVal()) {
-            comPower = true;
-        } else {
-            comPower = false;
+    compower_flag = true;
+
+    // Mise à jour de l'état ON/OFF
+    comPower = power->getNewVal();
+
+    // Vérifie si une nouvelle valeur H, S ou B a été envoyée
+    if (hue->getNewVal<float>() || saturation->getNewVal<float>() || brightness->getNewVal<float>()) {
+        Serial.println("Top: mise à jour HSB");
+
+        // Récupère les nouvelles valeurs envoyées par HomeKit
+        float newHueVal = hue->getNewVal<float>();
+        float newSatVal = saturation->getNewVal<float>();
+        float newBriVal = brightness->getNewVal<float>();
+
+        // Conversion pour FastLED (0-255)
+        uint8_t H = hueDegTo255(newHueVal);
+        uint8_t S = pctTo255(newSatVal);
+        uint8_t V = pctTo255(newBriVal);
+
+        // Clamp pour éviter overflow
+        uint8_t Hmin = wrap255(H - 8);
+        uint8_t Hmax = wrap255(H + 8);
+        int Smin = clampInt(S - 20, 0, 255);
+        int Smax = clampInt(S + 20, 0, 255);
+        int Vmin = clampInt(V - 20, 0, 255);
+        int Vmax = clampInt(V + 20, 0, 255);
+
+        int newdatalisteNewPara[nbParametre][nbPointMax] = {
+            {Hmin, Hmax},
+            {Smin, Smax},
+            {Vmin, Vmax},
+            {1, relative_to_real_pos(0.5)}
+        };
+
+        int newdataListeNewEffect[nbParametre][nbPointMax] = {
+            {1},
+            {2},
+            {3},
+            {600}
+        };
+
+        Preset new_preset(2, 1, newdatalisteNewPara, newdataListeNewEffect);
+
+        // Attend si une autre modification est en cours
+        while (changing) {
+            delay(10);
         }
-        return true;
+
+        preset_flag = true;
+        preset_act = new_preset;
+
+        // Affichage clair pour debug
+        Serial.printf("🎯 HSB: %.1f° / %.1f%% / %.1f%% -> FastLED(H=%u,S=%u,V=%u)\n",
+                      newHueVal, newSatVal, newBriVal,
+                      H, S, V);
     }
-};
-
-
-struct PresetSelectorService : Service::Fan {
-  Characteristic::RotationSpeed *presetSlider;
-  int lastSelectedPreset = -1;  // Mémorise le dernier preset appliqué
-
-  PresetSelectorService() : Service::Fan() {
-    presetSlider = new Characteristic::RotationSpeed(0);  // Valeur initiale : preset[0]
-    presetSlider->setRange(0, nbPreset - 1, 1);            // Min = 0, Max = nbPreset-1, step = 1
-  }
-
-  boolean update() override {
-    preset_flag = true;
-    int selectedPreset = (int)presetSlider->getVal();
-
-    if (selectedPreset != lastSelectedPreset) {
-      lastSelectedPreset = selectedPreset;
-      preset_act = presets[selectedPreset];
-      applyPreset(preset_act);
-    }
-
-    
 
     return true;
   }
@@ -1059,7 +1152,8 @@ void homeKitTask(void *parameter) {
 
     // Gestion des paramètres Wi-Fi
     homeSpan.setWifiCredentials("Livebox-72CA_EXT_24", "NCqLSErkrjCKFuow5t");
-    homeSpan.begin(Category::Lighting, "test_esp32");  // Initialiser HomeKit
+    // homeSpan.begin(Category::Lighting, "test esp32");  // Initialiser HomeKit
+    homeSpan.begin(Category::Lighting, HOMESPAN8NAME);
 
     // ---- Configuration de l'accessoire principal ----
     new SpanAccessory();
@@ -1067,7 +1161,7 @@ void homeKitTask(void *parameter) {
         new Characteristic::Identify();
         new Characteristic::Name("LED Lights");
       new LEDService();
-      new PresetSelectorService();
+      // new PresetSelectorService();
 
 
     Serial.println("Accessoire configuré, boucle HomeKit démarrée...");
