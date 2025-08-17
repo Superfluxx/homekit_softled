@@ -38,6 +38,7 @@ bool allumee = false;
 bool compower_flag = false;
 bool preset_flag = false;
 bool comPower = false;
+bool force_show = false;
 int nbPoint=2;
 int nbEffet=1;
 String etatAct="allumage";
@@ -53,33 +54,50 @@ String NomEffet[8]={"Aucun","Rot Trigo","Rot Horaire","Respiration","Scintilleme
 
 class Preset {
 public:
-  int nbPoint;
-  int nbEffet;
+    int nbPoint;
+    int nbEffet;
 
-  int listeNewPara[nbParametre][nbPointMax];
-  int listeNewEffect[nbParametre][nbPointMax];
+    int listeNewPara[nbParametre][nbPointMax];
+    int listeNewEffect[nbParametre][nbPointMax];
 
-  Preset() {
-  nbPoint = 0;
-  nbEffet = 0;
-  memset(listeNewPara, 0, sizeof(listeNewPara));
-  memset(listeNewEffect, 0, sizeof(listeNewEffect));
-}
-
-
-  Preset(int _nbPoint, int _nbEffet,
-        int _listeNewPara[nbParametre][nbPointMax],
-        int _listeNewEffect[nbParametre][nbPointMax])
-      : nbPoint(_nbPoint), nbEffet(_nbEffet) {
-
-    for (int i = 0; i < nbParametre; i++) {
-      for (int j = 0; j < nbPointMax; j++) {
-        listeNewPara[i][j] = _listeNewPara[i][j];
-        listeNewEffect[i][j] = _listeNewEffect[i][j];
-      }
+    Preset() {
+        nbPoint = 0;
+        nbEffet = 0;
+        memset(listeNewPara, 0, sizeof(listeNewPara));
+        memset(listeNewEffect, 0, sizeof(listeNewEffect));
     }
-  }
+
+    Preset(int _nbPoint, int _nbEffet,
+           int _listeNewPara[nbParametre][nbPointMax],
+           int _listeNewEffect[nbParametre][nbPointMax])
+        : nbPoint(_nbPoint), nbEffet(_nbEffet) {
+        for (int i = 0; i < nbParametre; i++) {
+            for (int j = 0; j < nbPointMax; j++) {
+                listeNewPara[i][j]   = _listeNewPara[i][j];
+                listeNewEffect[i][j] = _listeNewEffect[i][j];
+            }
+        }
+    }
+
+    // Comparaison de deux Preset
+    bool operator==(const Preset& other) const {
+        if (nbPoint != other.nbPoint || nbEffet != other.nbEffet) {
+            return false;
+        }
+        for (int i = 0; i < nbParametre; i++) {
+            for (int j = 0; j < nbPointMax; j++) {
+                if (listeNewPara[i][j] != other.listeNewPara[i][j]) return false;
+                if (listeNewEffect[i][j] != other.listeNewEffect[i][j]) return false;
+            }
+        }
+        return true;
+    }
+
+    bool operator!=(const Preset& other) const {
+        return !(*this == other);
+    }
 };
+
 
 Preset clonePreset(Preset src) {
   Preset clone;
@@ -104,6 +122,7 @@ Preset preset_1(2, 1, datalisteNewPara_1, dataListeNewEffect_1);
 
 Preset preset_act = preset_1;
 Preset preset_pre = preset_1;
+Preset preset_next = preset_1;
 
 void printLine(const char* name, int lineIndex, int tableau[nbParametre][nbPointMax], int nbPoints) {
   Serial.printf("%s: [", name);
@@ -223,12 +242,11 @@ void ChangementEffet()//sert uniquement a la comunication
   }
 }
 
-
 void CommunicationLEDS()
 {
   for(int i=0 ; i<NUM_LEDS ; i++)
   {
-    if(compower_flag || preset_flag){break;}
+    if((compower_flag || preset_flag) && !force_show){break;}
     
 
     CHSV spectrumcolor;
@@ -955,23 +973,30 @@ void C() {
     preset_extinct.listeNewPara[2][i] = 0;
   }
   applyPreset(preset_extinct); 
+  force_show = true;
   A();
   B();
+  force_show = false;
   allumee = false;
   changing = false;
 }
 
 void D()
 {
-  changing = true;
-  Serial.println("D");
-  etatPre=etatAct;
-  etatAct="On";
-  applyPreset(preset_act);
-  A();
-  B();
-  allumee =true;
-  changing = false;
+  while (preset_act != preset_next){
+    changing = true;
+    Serial.println("D");
+    preset_act = preset_next;
+    etatPre=etatAct;
+    etatAct="On";
+    applyPreset(preset_act);
+    force_show = true;
+    A();
+    B();
+    force_show = false;
+    allumee =true;
+    changing = false;
+  }
 }
 
 
@@ -1043,7 +1068,7 @@ struct LEDService : Service::LightBulb {
     Characteristic::On *power;         
     Characteristic::Hue *hue;          
     Characteristic::Saturation *saturation;
-    Characteristic::Brightness *brightness;   
+    Characteristic::Brightness *brightness;
 
     LEDService() : Service::LightBulb() {
         power = new Characteristic::On(false);   // Lumière éteinte au démarrage
@@ -1081,66 +1106,65 @@ struct LEDService : Service::LightBulb {
 
 
     boolean update() override {
-    compower_flag = true;
+      // if (!changing){
+        compower_flag = true;
+        comPower = power->getNewVal();
 
-    // Mise à jour de l'état ON/OFF
-    comPower = power->getNewVal();
+        // Vérifie si une nouvelle valeur H, S ou B a été envoyée
+        if (hue->getNewVal<float>() || saturation->getNewVal<float>() || brightness->getNewVal<float>()) {
+          Serial.println("Top: mise à jour HSB");
 
-    // Vérifie si une nouvelle valeur H, S ou B a été envoyée
-    if (hue->getNewVal<float>() || saturation->getNewVal<float>() || brightness->getNewVal<float>()) {
-        Serial.println("Top: mise à jour HSB");
+          // Récupère les nouvelles valeurs envoyées par HomeKit
+          float newHueVal = hue->getNewVal<float>();
+          float newSatVal = saturation->getNewVal<float>();
+          float newBriVal = brightness->getNewVal<float>();
 
-        // Récupère les nouvelles valeurs envoyées par HomeKit
-        float newHueVal = hue->getNewVal<float>();
-        float newSatVal = saturation->getNewVal<float>();
-        float newBriVal = brightness->getNewVal<float>();
+          // Conversion pour FastLED (0-255)
+          uint8_t H = hueDegTo255(newHueVal);
+          uint8_t S = pctTo255(newSatVal);
+          uint8_t V = pctTo255(newBriVal);
 
-        // Conversion pour FastLED (0-255)
-        uint8_t H = hueDegTo255(newHueVal);
-        uint8_t S = pctTo255(newSatVal);
-        uint8_t V = pctTo255(newBriVal);
+          // Clamp pour éviter overflow
+          uint8_t Hmin = wrap255(H - 8);
+          uint8_t Hmax = wrap255(H + 8);
+          int Smin = clampInt(S - 20, 0, 255);
+          int Smax = clampInt(S + 20, 0, 255);
+          int Vmin = clampInt(V - 20, 0, 255);
+          int Vmax = clampInt(V + 20, 0, 255);
 
-        // Clamp pour éviter overflow
-        uint8_t Hmin = wrap255(H - 8);
-        uint8_t Hmax = wrap255(H + 8);
-        int Smin = clampInt(S - 20, 0, 255);
-        int Smax = clampInt(S + 20, 0, 255);
-        int Vmin = clampInt(V - 20, 0, 255);
-        int Vmax = clampInt(V + 20, 0, 255);
+          int newdatalisteNewPara[nbParametre][nbPointMax] = {
+              {Hmin, Hmax},
+              {Smin, Smax},
+              {Vmin, Vmax},
+              {1, relative_to_real_pos(0.5)}
+          };
 
-        int newdatalisteNewPara[nbParametre][nbPointMax] = {
-            {Hmin, Hmax},
-            {Smin, Smax},
-            {Vmin, Vmax},
-            {1, relative_to_real_pos(0.5)}
-        };
+          int newdataListeNewEffect[nbParametre][nbPointMax] = {
+              {1},
+              {2},
+              {3},
+              {600}
+          };
 
-        int newdataListeNewEffect[nbParametre][nbPointMax] = {
-            {1},
-            {2},
-            {3},
-            {600}
-        };
+          Preset new_preset(2, 1, newdatalisteNewPara, newdataListeNewEffect);
 
-        Preset new_preset(2, 1, newdatalisteNewPara, newdataListeNewEffect);
+          // Attend si une autre modification est en cours
+          while (changing) {
+              delay(10);
+          }
+          preset_next = new_preset;
+          preset_flag = true;
 
-        // Attend si une autre modification est en cours
-        while (changing) {
-            delay(10);
+          // Affichage clair pour debug
+          Serial.printf("🎯 HSB: %.1f° / %.1f%% / %.1f%% -> FastLED(H=%u,S=%u,V=%u)\n",
+                        newHueVal, newSatVal, newBriVal,
+                        H, S, V);
         }
-
-        preset_flag = true;
-        preset_act = new_preset;
-
-        // Affichage clair pour debug
-        Serial.printf("🎯 HSB: %.1f° / %.1f%% / %.1f%% -> FastLED(H=%u,S=%u,V=%u)\n",
-                      newHueVal, newSatVal, newBriVal,
-                      H, S, V);
-    }
-
+      // }
     return true;
   }
 };
+
 
 
 // ---- Tâche dédiée à HomeKit et au serveur ----
