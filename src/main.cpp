@@ -2,15 +2,29 @@
 #include <HomeSpan.h>  // Inclure la bibliothèque HomeSpan pour HomeKit
 #include <algorithm> // pour std::clamp
 
+struct LEDService; 
 
-#define NUM_LEDS      7//186
+#define NUM_LEDS      72//186
 #define HOMESPAN8NAME "test esp32"//"Bureau"
 
 // ---- Configuration des LEDs ----
 #define LED_PIN     4
 #define BRIGHTNESS  255
-#define LED_TYPE    WS2812B
+#define LED_TYPE    WS2815 //WS2812B
 #define COLOR_ORDER GRB
+// ---- Configuration encodeur
+#define ENC_A   21
+#define ENC_B   19
+#define ENC_SW  18
+
+volatile int encoderValue = 0;
+volatile bool buttonPressed = false;
+volatile int encoderDelta = 0;      // +1 / -1
+volatile bool encoderClick = false;
+
+
+LEDService *ledService = nullptr;   // pointeur vers ton service
+
 CRGB leds[NUM_LEDS];
 
 
@@ -200,16 +214,16 @@ void D();
 void show() {
     static unsigned long lastFrame = 0;             // Temps de la dernière frame
     unsigned long now = millis();                   // Temps actuel
-    unsigned long frameTime = 1000 / 60;           // Durée d'une frame à 60 FPS (≈16 ms)
+    unsigned long frameTime = 1000 / 60;            // Durée d'une frame à 60 FPS (≈16 ms)
 
     // Temps écoulé depuis la dernière frame
     unsigned long elapsed = now - lastFrame;
 
     if (elapsed < frameTime) {
         unsigned long waitTime = frameTime - elapsed;
-        Serial.print("delayed for ");
-        Serial.print(waitTime);
-        Serial.println(" ms");
+        // Serial.print("delayed for ");
+        // Serial.print(waitTime);
+        // Serial.println(" ms");
         FastLED.delay(waitTime);
     }
 
@@ -1071,6 +1085,8 @@ struct LEDService : Service::LightBulb {
     Characteristic::Brightness *brightness;
 
     LEDService() : Service::LightBulb() {
+        ledService = this;
+
         power = new Characteristic::On(false);   // Lumière éteinte au démarrage
         hue = new Characteristic::Hue(0);        // 0° (rouge)
         saturation = new Characteristic::Saturation(0);   // 0%
@@ -1105,65 +1121,115 @@ struct LEDService : Service::LightBulb {
     }
 
 
-    boolean update() override {
-      // if (!changing){
-        compower_flag = true;
-        comPower = power->getNewVal();
+boolean update() override {
+    // Toujours mettre à jour le power flag
+    compower_flag = true;
+    comPower = power->getVal<bool>();  // prend en compte HomeKit ou encodeur
 
-        // Vérifie si une nouvelle valeur H, S ou B a été envoyée
-        if (hue->getNewVal<float>() || saturation->getNewVal<float>() || brightness->getNewVal<float>()) {
-          Serial.println("Top: mise à jour HSB");
+    // Vérifie si H, S ou B ont changé (HomeKit ou encodeur)
+    float newHueVal  = hue->getVal<float>();
+    float newSatVal  = saturation->getVal<float>();
+    float newBriVal  = brightness->getVal<float>();
 
-          // Récupère les nouvelles valeurs envoyées par HomeKit
-          float newHueVal = hue->getNewVal<float>();
-          float newSatVal = saturation->getNewVal<float>();
-          float newBriVal = brightness->getNewVal<float>();
+    // Si la valeur réelle a changé par rapport à la précédente
+    static float lastHue = -1;
+    static float lastSat = -1;
+    static float lastBri = -1;
 
-          // Conversion pour FastLED (0-255)
-          uint8_t H = hueDegTo255(newHueVal);
-          uint8_t S = pctTo255(newSatVal);
-          uint8_t V = pctTo255(newBriVal);
+    if (newHueVal != lastHue || newSatVal != lastSat || newBriVal != lastBri) {
 
-          // Clamp pour éviter overflow
-          uint8_t Hmin = wrap255(H - 8);
-          uint8_t Hmax = wrap255(H + 8);
-          int Smin = clampInt(S - 20, 0, 255);
-          int Smax = clampInt(S + 20, 0, 255);
-          int Vmin = clampInt(V - 20, 0, 255);
-          int Vmax = clampInt(V + 20, 0, 255);
+        Serial.println("Top: mise à jour HSB (HomeKit ou Encodeur)");
 
-          int newdatalisteNewPara[nbParametre][nbPointMax] = {
-              {Hmin, Hmax},
-              {Smin, Smax},
-              {Vmin, Vmax},
-              {1, relative_to_real_pos(0.5)}
-          };
+        lastHue = newHueVal;
+        lastSat = newSatVal;
+        lastBri = newBriVal;
 
-          int newdataListeNewEffect[nbParametre][nbPointMax] = {
-              {1},
-              {2},
-              {3},
-              {600}
-          };
+        // Conversion pour FastLED (0-255)
+        uint8_t H = hueDegTo255(newHueVal);
+        uint8_t S = pctTo255(newSatVal);
+        uint8_t V = pctTo255(newBriVal);
 
-          Preset new_preset(2, 1, newdatalisteNewPara, newdataListeNewEffect);
+        // Clamp pour éviter overflow
+        uint8_t Hmin = wrap255(H - 8);
+        uint8_t Hmax = wrap255(H + 8);
+        int Smin = clampInt(S - 20, 0, 255);
+        int Smax = clampInt(S + 20, 0, 255);
+        int Vmin = clampInt(V - 20, 0, 255);
+        int Vmax = clampInt(V + 20, 0, 255);
 
-          // Attend si une autre modification est en cours
-          while (changing) {
-              delay(10);
-          }
-          preset_next = new_preset;
-          preset_flag = true;
+        int newdatalisteNewPara[nbParametre][nbPointMax] = {
+            {Hmin, Hmax},
+            {Smin, Smax},
+            {Vmin, Vmax},
+            {1, relative_to_real_pos(0.5)}
+        };
 
-          // Affichage clair pour debug
-          Serial.printf("🎯 HSB: %.1f° / %.1f%% / %.1f%% -> FastLED(H=%u,S=%u,V=%u)\n",
-                        newHueVal, newSatVal, newBriVal,
-                        H, S, V);
+        int newdataListeNewEffect[nbParametre][nbPointMax] = {
+            {1},
+            {2},
+            {3},
+            {600}
+        };
+
+        Preset new_preset(2, 1, newdatalisteNewPara, newdataListeNewEffect);
+
+        // Attend si une autre modification est en cours
+        while (changing) {
+            delay(10);
         }
-      // }
+        preset_next = new_preset;
+        preset_flag = true;
+
+        // Affichage clair pour debug
+        Serial.printf("🎯 HSB: %.1f° / %.1f%% / %.1f%% -> FastLED(H=%u,S=%u,V=%u)\n",
+                      newHueVal, newSatVal, newBriVal,
+                      H, S, V);
+    }
+
     return true;
+
+
   }
 };
+
+void processEncoderForHomeKit() {
+    if (!ledService) return;
+
+    // --- Facteur de vitesse (plus grand = changement plus rapide) ---
+    const int encoderSpeedFactor = 3;  // par exemple x3
+
+    bool currentPower = ledService->power->getVal<bool>();
+
+    // 🔄 Rotation → luminosité
+    if (currentPower){
+      if (encoderDelta != 0) {
+        int currentBri = ledService->brightness->getVal<int>();
+        int newBri = currentBri + encoderDelta * encoderSpeedFactor;
+
+        // Clamp entre 5 et 100%
+        newBri = LEDService::clampInt(newBri, 5, 100);
+
+        if (newBri != currentBri) {
+            ledService->brightness->setVal(newBri);
+            Serial.printf("🔄 Encodeur → Brightness %d%%\n", newBri);
+        }
+
+        encoderDelta = 0;
+      }
+    }
+
+    if (encoderClick) {
+        
+        ledService->power->setVal(!currentPower);
+
+        Serial.printf("🔘 Encodeur → Power %s\n", !currentPower ? "ON" : "OFF");
+        encoderClick = false;
+    }
+
+    // --- Appliquer immédiatement les changements à FastLED / HomeKit ---
+
+    ledService->update();
+}
 
 
 
@@ -1175,8 +1241,6 @@ void homeKitTask(void *parameter) {
     homeSpan.setQRID("111-22-333");      // QR ID pour HomeKit
 
     // Gestion des paramètres Wi-Fi
-    homeSpan.setWifiCredentials("Livebox-72CA_EXT_24", "NCqLSErkrjCKFuow5t");
-    // homeSpan.begin(Category::Lighting, "test esp32");  // Initialiser HomeKit
     homeSpan.begin(Category::Lighting, HOMESPAN8NAME);
 
     // ---- Configuration de l'accessoire principal ----
@@ -1193,16 +1257,57 @@ void homeKitTask(void *parameter) {
     // Démarrer la boucle principale HomeKit
     while (true) {
         homeSpan.poll();  // Gérer les requêtes HomeKit
+        processEncoderForHomeKit(); 
         vTaskDelay(10 / portTICK_PERIOD_MS);  // Laisser du temps pour éviter une surcharge
 
 
     }
 }
 
+void encoderTask(void *parameter) {
+    int lastA = digitalRead(ENC_A);
+
+    while (true) {
+        int A = digitalRead(ENC_A);
+        int B = digitalRead(ENC_B);
+
+        if (A != lastA) {
+            if (B != A) encoderDelta++;
+            else encoderDelta--;
+        }
+        lastA = A;
+
+        if (digitalRead(ENC_SW) == LOW) {
+            encoderClick = true;
+            vTaskDelay(pdMS_TO_TICKS(300)); // debounce
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+}
+
+
+
 void setup() {
+
+    pinMode(ENC_A, INPUT_PULLUP);
+    pinMode(ENC_B, INPUT_PULLUP);
+    pinMode(ENC_SW, INPUT_PULLUP);
+
+
     Serial.begin(115200);
     Serial.println("Initialisation du système...");
 
+    // === Tâche Encodeur ===
+    xTaskCreatePinnedToCore(
+        encoderTask,
+        "Encoder Task",
+        2048,
+        NULL,
+        4,
+        NULL,
+        1
+    );
 
     // Démarrer la tâche LED
     xTaskCreatePinnedToCore(
